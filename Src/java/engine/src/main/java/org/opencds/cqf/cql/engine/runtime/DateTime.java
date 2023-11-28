@@ -1,17 +1,15 @@
 package org.opencds.cqf.cql.engine.runtime;
 
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.TimeZone;
-
+import org.opencds.cqf.cql.engine.exception.CqlException;
 import org.opencds.cqf.cql.engine.exception.InvalidDateTime;
-import org.opencds.cqf.cql.engine.execution.State;
+import java.math.BigDecimal;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
+import java.util.Objects;
 
 public class DateTime extends BaseTemporal {
+    private ZoneOffset zoneOffset;
 
     private OffsetDateTime dateTime;
     public OffsetDateTime getDateTime() {
@@ -27,10 +25,6 @@ public class DateTime extends BaseTemporal {
         }
         this.dateTime = dateTime;
     }
-    public DateTime withDateTime(OffsetDateTime dateTime) {
-        setDateTime(dateTime);
-        return this;
-    }
 
     public DateTime withPrecision(Precision precision) {
         this.precision = precision;
@@ -40,20 +34,27 @@ public class DateTime extends BaseTemporal {
     public DateTime(OffsetDateTime dateTime) {
         setDateTime(dateTime);
         this.precision = Precision.MILLISECOND;
+        zoneOffset = toZoneOffset(dateTime);
     }
 
     public DateTime(OffsetDateTime dateTime, Precision precision) {
         setDateTime(dateTime);
         this.precision = precision;
+        zoneOffset = toZoneOffset(dateTime);
     }
 
     public DateTime(String dateString, ZoneOffset offset) {
+        if (offset == null) {
+            throw new CqlException("Cannot pass a null offset");
+        }
+
+        zoneOffset = offset;
+
         // Handles case when Tz is not complete (T02:04:59.123+01)
         if (dateString.matches("T[0-2]\\d:[0-5]\\d:[0-5]\\d\\.\\d{3}(\\+|-)\\d{2}$")) {
             dateString += ":00";
         }
         int size = 0;
-        boolean hasOffset = true;
         if (dateString.contains("T")) {
             String[] datetimeSplit = dateString.split("T");
             size += datetimeSplit[0].split("-").length;
@@ -65,38 +66,29 @@ public class DateTime extends BaseTemporal {
             precision = Precision.fromDateTimeIndex(size - 1);
             if (tzSplit.length == 1 && !dateString.contains("Z")) {
                 dateString = TemporalHelper.autoCompleteDateTimeString(dateString, precision);
-                if (offset != null) {
-                    dateString += offset.getId();
-                }
-                else {
-                    hasOffset = false;
-                }
+                dateString += offset.getId();
             }
         }
         else {
             size += dateString.split("-").length;
             precision = Precision.fromDateTimeIndex(size - 1);
             dateString = TemporalHelper.autoCompleteDateTimeString(dateString, precision);
-            if (offset != null) {
-                dateString += offset.getId();
-            }
-            else {
-                hasOffset = false;
-            }
+            dateString += offset.getId();
         }
 
-        if (hasOffset) {
-            setDateTime(OffsetDateTime.parse(dateString));
-        }
-        else {
-            setDateTime(TemporalHelper.toOffsetDateTime(LocalDateTime.parse(dateString)));
-        }
+        setDateTime(OffsetDateTime.parse(dateString));
     }
 
     public DateTime(BigDecimal offset, int ... dateElements) {
+        if (offset == null) {
+            throw new CqlException("BigDecimal offset must be non-null");
+        }
+
         if (dateElements.length == 0) {
             throw new InvalidDateTime("DateTime must include a year");
         }
+
+        zoneOffset = toZoneOffset(offset);
 
         StringBuilder dateString = new StringBuilder();
         String[] stringElements = TemporalHelper.normalizeDateTimeElements(dateElements);
@@ -123,18 +115,12 @@ public class DateTime extends BaseTemporal {
 
         precision = Precision.fromDateTimeIndex(stringElements.length - 1);
         dateString = new StringBuilder().append(TemporalHelper.autoCompleteDateTimeString(dateString.toString(), precision));
+        dateString.append(zoneOffset.getId());
+        setDateTime(OffsetDateTime.parse(dateString.toString()));
+    }
 
-        // If the incoming string has an offset specified, use that offset
-        // Otherwise, parse as a LocalDateTime and then interpret that in the evaluation timezone
-
-        if (offset != null) {
-            dateString.append(ZoneOffset.ofHoursMinutes(offset.intValue(), new BigDecimal("60").multiply(offset.remainder(BigDecimal.ONE)).intValue()).getId());
-            setDateTime(OffsetDateTime.parse(dateString.toString()));
-        }
-        else {
-            setDateTime(TemporalHelper.toOffsetDateTime(LocalDateTime.parse(dateString.toString())));
-        }
-
+    public ZoneOffset getZoneOffset() {
+        return zoneOffset;
     }
 
     public DateTime expandPartialMinFromPrecision(Precision thePrecision) {
@@ -204,20 +190,20 @@ public class DateTime extends BaseTemporal {
         }
     }
 
-    public OffsetDateTime getNormalized(Precision precision, State c) {
+    public OffsetDateTime getNormalized(Precision precision) {
+        return getNormalized(precision, zoneOffset);
+    }
+
+    public OffsetDateTime getNormalized(Precision precision, ZoneOffset nullableZoneOffset) {
         if (precision.toDateTimeIndex() > Precision.DAY.toDateTimeIndex()) {
-            if (c != null) {
-                return dateTime.atZoneSameInstant(c.getEvaluationZonedDateTime().getZone()).toOffsetDateTime();
+            if (nullableZoneOffset != null) {
+                return dateTime.withOffsetSameInstant(nullableZoneOffset);
             }
 
-            return dateTime.atZoneSameInstant(TimeZone.getDefault().toZoneId()).toOffsetDateTime();
+            throw new IllegalStateException("There must be a non-null offset!");
         }
 
         return dateTime;
-    }
-
-    public OffsetDateTime getNormalized(Precision precision) {
-        return getNormalized(precision, null);
     }
 
     @Override
@@ -227,7 +213,7 @@ public class DateTime extends BaseTemporal {
 
         // adjust dates to evaluation offset
         OffsetDateTime leftDateTime = this.getNormalized(thePrecision);
-        OffsetDateTime rightDateTime = ((DateTime) other).getNormalized(thePrecision);
+        OffsetDateTime rightDateTime = ((DateTime) other).getNormalized(thePrecision, getZoneOffset());
 
         if (!leftMeetsPrecisionRequirements || !rightMeetsPrecisionRequirements) {
             thePrecision = Precision.getLowestDateTimePrecision(this.precision, other.precision);
@@ -269,6 +255,27 @@ public class DateTime extends BaseTemporal {
     }
 
     @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (other == null || getClass() != other.getClass()) {
+            return false;
+        }
+
+        final DateTime otherDateTime = (DateTime) other;
+
+        return Objects.equals(zoneOffset, otherDateTime.zoneOffset) &&
+               Objects.equals(precision, otherDateTime.precision) &&
+               Objects.equals(dateTime, otherDateTime.dateTime);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(zoneOffset, dateTime);
+    }
+
+    @Override
     public String toString() {
         switch (precision) {
             case YEAR: return String.format("%04d", dateTime.getYear());
@@ -287,9 +294,22 @@ public class DateTime extends BaseTemporal {
         return java.util.Date.from(dateTime.toInstant());
     }
 
-    public static DateTime fromJavaDate(Date date) {
-        Calendar calendar = Calendar.getInstance();
-        calendar.setTime(date);
-        return new DateTime(OffsetDateTime.ofInstant(calendar.toInstant(), calendar.getTimeZone().toZoneId()), Precision.MILLISECOND);
+    public String toDateString() {
+        return DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(dateTime);
+    }
+
+    private ZoneOffset toZoneOffset(OffsetDateTime offsetDateTime) {
+        return offsetDateTime.getOffset();
+    }
+
+    private ZoneOffset toZoneOffset(BigDecimal offsetAsBigDecimal) {
+        if (offsetAsBigDecimal == null) {
+            return null;
+        }
+
+        return ZoneOffset.ofHoursMinutes(offsetAsBigDecimal.intValue(),
+                new BigDecimal(60)
+                .multiply(offsetAsBigDecimal.remainder(BigDecimal.ONE))
+                        .intValue());
     }
 }

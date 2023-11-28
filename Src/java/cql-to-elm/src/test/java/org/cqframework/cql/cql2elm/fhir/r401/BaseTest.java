@@ -2,6 +2,7 @@ package org.cqframework.cql.cql2elm.fhir.r401;
 
 import org.cqframework.cql.cql2elm.CqlCompilerOptions;
 import org.cqframework.cql.cql2elm.CqlTranslator;
+import org.cqframework.cql.cql2elm.LibraryBuilder;
 import org.hl7.cql.model.NamespaceInfo;
 import org.cqframework.cql.cql2elm.TestUtils;
 import org.cqframework.cql.cql2elm.model.CompiledLibrary;
@@ -13,7 +14,9 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.cqframework.cql.cql2elm.TestUtils.visitFile;
 import static org.cqframework.cql.cql2elm.TestUtils.visitFileLibrary;
@@ -830,5 +833,51 @@ public class BaseTest {
         QueryLetRef qlr = (QueryLetRef)p.getSource();
         assertThat(qlr.getName(), equalTo("M"));
         assertThat(eqv.getOperand().get(1), instanceOf(ToConcept.class));
+    }
+
+    @Test
+    public void testOverload() throws IOException {
+        CqlTranslator translator = TestUtils.runSemanticTest("fhir/r401/TestOverload.cql", 0);
+        assertThat(translator.getWarnings().size(), is(2));
+
+        final List<String> warningMessages = translator.getWarnings().stream().map(Throwable::getMessage).collect(Collectors.toList());
+        assertThat(warningMessages.toString(), translator.getWarnings().size(), is(2));
+
+        final String first = "You used a string literal: [Encounter] here that matches an identifier in scope: [Encounter]. Did you mean to use the identifier instead? \n";
+        final String second = "The function TestOverload.Stringify has multiple overloads and due to the SignatureLevel setting (None), the overload signature is not being included in the output. This may result in ambiguous function resolution at runtime, consider setting the SignatureLevel to Overloads or All to ensure that the output includes sufficient information to support correct overload selection at runtime.";
+
+        assertThat(warningMessages.toString(), warningMessages, containsInAnyOrder(first, second));
+    }
+
+    @Test
+    public void testOverloadOutput() throws IOException {
+        CqlTranslator translator = TestUtils.runSemanticTest("fhir/r401/TestOverload.cql", 0, LibraryBuilder.SignatureLevel.Overloads);
+        assertThat(translator.getWarnings().size(), is(1));
+
+        final List<String> warningMessages = translator.getWarnings().stream().map(Throwable::getMessage).collect(Collectors.toList());
+        assertThat(warningMessages.toString(), warningMessages, contains("You used a string literal: [Encounter] here that matches an identifier in scope: [Encounter]. Did you mean to use the identifier instead? \n"));
+    }
+
+    @Test
+    public void testOverloadForward() throws IOException {
+        CqlTranslator translator = TestUtils.runSemanticTest("fhir/r401/TestOverloadForward.cql", 0);
+        assertThat(translator.getWarnings().size(), is(2));
+
+        final List<String> warningMessages = translator.getWarnings().stream().map(Throwable::getMessage).collect(Collectors.toList());
+        assertThat(warningMessages.toString(), translator.getWarnings().size(), is(2));
+
+        final String first = "You used a string literal: [Encounter] here that matches an identifier in scope: [Encounter]. Did you mean to use the identifier instead? \n";
+        final String second = "The function TestOverloadForward.Stringify has multiple overloads and due to the SignatureLevel setting (None), the overload signature is not being included in the output. This may result in ambiguous function resolution at runtime, consider setting the SignatureLevel to Overloads or All to ensure that the output includes sufficient information to support correct overload selection at runtime.";
+
+        assertThat(warningMessages.toString(), warningMessages, containsInAnyOrder(first, second));
+    }
+
+    @Test
+    public void testOverloadForwardOutput() throws IOException {
+        CqlTranslator translator = TestUtils.runSemanticTest("fhir/r401/TestOverloadForward.cql", 0, LibraryBuilder.SignatureLevel.Overloads);
+        assertThat(translator.getWarnings().size(), is(1));
+
+        final List<String> warningMessages = translator.getWarnings().stream().map(Throwable::getMessage).collect(Collectors.toList());
+        assertThat(warningMessages.toString(), warningMessages, contains("You used a string literal: [Encounter] here that matches an identifier in scope: [Encounter]. Did you mean to use the identifier instead? \n"));
     }
 }
